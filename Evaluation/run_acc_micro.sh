@@ -9,13 +9,13 @@ fan_out=10,25
 layer=2
 
 # reddit ogbn-arxiv ogbn-products amazon ogbn-papers100M
-data=(reddit)
+data=(ogbn-arxiv)
 hidden=(64)
 method=Cherry
 
 # SAGE GCN GAT
 model=(SAGE GCN)
-
+nb=1
 for da in ${data[@]}
 do  
     save_path=./ac_log/${da}

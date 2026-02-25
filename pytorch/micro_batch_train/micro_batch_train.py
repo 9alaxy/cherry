@@ -1,6 +1,8 @@
 import sys
 sys.path.insert(0,'..')
+import pprint
 
+pprint.pprint(sys.path)
 import dgl
 import numpy as np
 import torch

@@ -3,7 +3,8 @@ mkdir ./ac_log
 device_number=0
 
 # num_batch=(1 2 4 8 16 32)
-epoch=500
+num_batch=(4)
+epoch=200
 
 fan_out=10,25
 layer=2

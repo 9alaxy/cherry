@@ -1,7 +1,7 @@
 # from Betty https://zenodo.org/records/7439846
 import sys
-sys.path.insert(0,'../utils/')
-sys.path.insert(0,'../models/')
+sys.path.insert(0,'../../utils/')
+sys.path.insert(0,'../../models/')
 import dgl
 from dgl.data.utils import save_graphs
 import numpy as np

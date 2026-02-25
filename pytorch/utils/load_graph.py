@@ -202,3 +202,57 @@ def inductive_split(g):
 	val_g = g.subgraph(g.ndata['train_mask'] | g.ndata['val_mask'])
 	test_g = g
 	return train_g, val_g, test_g
+
+def load_ogbn_dataset(name,  args):
+	"""
+	Load dataset and move graph and features
+	"""
+	'''if name not in ["ogbn-products", "ogbn-arxiv","ogbn-mag"]:
+		raise RuntimeError("Dataset {} is not supported".format(name))'''
+	if name not in ["ogbn-products", "ogbn-arxiv","ogbn-mag","ogbn-papers100M"]:
+		raise RuntimeError("Dataset {} is not supported".format(name))
+	home_dir = os.getenv("HOME")
+	dataset = DglNodePropPredDataset(name=name, root=os.path.join(home_dir, "graph_partition_multi_layers/benchmark_full_graph", "dataset"))
+	
+	# dataset = DglNodePropPredDataset(name=name, root = args.root)
+	splitted_idx = dataset.get_idx_split()
+	print(name)
+	
+	if "arxiv" in name:
+		train_nid = splitted_idx["train"]
+		val_nid = splitted_idx["valid"]
+		test_nid = splitted_idx["test"]
+		g, labels = dataset[0]        
+		g = dgl.remove_self_loop(g)
+		nfeats = g.ndata['feat']
+		g = dgl.to_bidirected(g)
+		n_classes = dataset.num_classes        
+		labels = labels.squeeze()
+		# evaluator = Evaluator(name='ogbn-arxiv')
+		# evaluator = get_ogb_evaluator(name)        
+		print(f"# Nodes: {g.number_of_nodes()}\n"
+			f"# Edges: {g.number_of_edges()}\n"
+			f"# Train: {len(train_nid)}\n"
+			f"# Val: {len(val_nid)}\n"
+			f"# Test: {len(test_nid)}\n"
+			f"# Classes: {n_classes}\n")
+
+		# return g, nfeats, labels, n_classes, train_nid, val_nid, test_nid, splitted_idx
+		return g, nfeats, labels, n_classes, train_nid, val_nid, test_nid
+
+	if name=="ogbn-papers100M":
+		train_nid = splitted_idx["train"]
+		val_nid = splitted_idx["valid"]
+		test_nid = splitted_idx["test"]
+		g, labels = dataset[0]        
+		n_classes = dataset.num_classes        
+		labels = labels.squeeze()
+		evaluator = get_ogb_evaluator(name)        
+		print(f"# Nodes: {g.number_of_nodes()}\n"
+			f"# Edges: {g.number_of_edges()}\n"
+			f"# Train: {len(train_nid)}\n"
+			f"# Val: {len(val_nid)}\n"
+			f"# Test: {len(test_nid)}\n"
+			f"# Classes: {n_classes}\n")
+
+		return g, labels, n_classes, train_nid, val_nid, test_nid, evaluator

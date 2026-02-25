@@ -12,7 +12,7 @@ hidden=(128)
 # SAGE GCN GAT
 model=(GAT)
 # Cherry Metis Random
-method=(Random)
+method=(Cherry)
 # reddit ogbn-arxiv ogbn-products amazon ogbn-papers100M
 data=(ogbn-products)
 aggr=mean

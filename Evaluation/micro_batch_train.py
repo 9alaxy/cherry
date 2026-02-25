@@ -18,7 +18,7 @@ from cherry_graph_partitioner import Graph_Partitioner, get_global_graph_edges_i
 from graphsage_model import GraphSAGE
 from gcn_model_cherry import GCN
 from gat_model_cherry import GAT
-from load_graph import load_reddit, load_ogb, prepare_data, load_amazon
+from load_graph import load_reddit, load_ogb, prepare_data, load_amazon, load_karate
 from load_graph import load_ogbn_dataset
 from memory_usage import see_memory_usage
 from utils import Logger
@@ -368,7 +368,14 @@ def main():
 	if args.GPUmem:
 		see_memory_usage("-----------------------------------------before load data ")
 	
-	if args.dataset=='reddit':
+	if args.dataset=='karate':
+		g, n_classes = load_karate()
+		print('#nodes:', g.number_of_nodes())
+		print('#edges:', g.number_of_edges())
+		print('#classes:', n_classes)
+		device = "cuda:0"
+		data=prepare_data(g, n_classes, args, device)
+	elif args.dataset=='reddit':
 		g, n_classes = load_reddit()
 		device = "cuda:0"
 		data=prepare_data(g, n_classes, args, device)

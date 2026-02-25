@@ -311,7 +311,7 @@ def main():
 
 	args = argparser.parse_args()
 
-	os.environ["CUDA_VISIBLE_DEVICES"] = args.device_number
+	# os.environ["CUDA_VISIBLE_DEVICES"] = args.device_number
 	if args.setseed:
 		set_seed(args)
 	device = "cpu"
@@ -372,4 +372,5 @@ def main():
 	
 
 if __name__=='__main__':
+	os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 	main()
