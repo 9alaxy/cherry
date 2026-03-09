@@ -120,7 +120,7 @@ def gen_micro_batch(g, train_nid, args):
 	weights_list = []
 	
 	t1 = time.time()
-	if args.selection_method == 'Metis' or args.selection_method == 'Cherry':
+	if args.selection_method == 'Metis' or args.selection_method == 'Cherry' or args.selection_method == 'Berry':
 		for _,(src_full, dst_full, full_blocks) in enumerate(full_batch_dataloader):
 			for layer_id, layer_block in enumerate(reversed(full_blocks)):
 				block_eidx_global, block_edges_nids_global = get_global_graph_edges_ids_block(g, layer_block)

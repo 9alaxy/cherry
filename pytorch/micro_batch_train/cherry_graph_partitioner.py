@@ -112,6 +112,48 @@ class Graph_Partitioner:
 				
 			print('Partition end ----................................')
 			self.local_batched_seeds_list=res
+
+		elif self.selection_method == "Berry":
+			print('IODG Partition start----................................')
+			t1 = time.time()
+			
+			# u -> src_node
+			# v -> dst_node
+			u, v =self.layer_block.edges()[0], self.layer_block.edges()[1] # local edges
+			g = dgl.graph((u,v))
+
+			# compute out degrees
+			in_degrees = g.in_degrees(g.nodes())
+			out_degrees = g.out_degrees(g.nodes())
+			# Set weight as the src_nodes' out degrees
+			g.edata['w'] = in_degrees[v] + out_degrees[u]
+
+			print("Out-degree Compute Time: ", time.time() - t1)
+
+			t2 = time.time()
+			to_remove = self.remove_non_output_nodes()
+			if len(to_remove) > 0:
+				g.remove_nodes(torch.tensor(to_remove))
+			g_no_diag = dgl.remove_self_loop(g)
+			print("Graph Check Time: ", time.time() - t2)
+
+			print("--------Partition Graph Info")
+			print("nodes: ", g.number_of_nodes())
+			print("edges: ", g.number_of_edges())
+
+			t3 = time.time()
+			partition = dgl.metis_partition(g=g_no_diag,k=self.args.num_batch)
+			print("Metis Time: ", time.time() - t3)
+			print("Out-degree Partition Time: ", time.time() - t1)
+
+			res=[]
+			for pid in partition:
+				nids = partition[pid].ndata[dgl.NID].tolist()
+				res.append(sorted(nids))
+				
+			print('IODG Partition end----................................')
+			self.local_batched_seeds_list=res
+		
 		return
 
 	def get_src_len(self,seeds):
