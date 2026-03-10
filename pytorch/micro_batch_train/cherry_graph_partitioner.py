@@ -3,19 +3,63 @@ import torch
 import time
 from my_utils import *
 import numpy as np
+from collections import defaultdict
+
+
+def calculate_replication_factor(layer_block, local_batched_seeds_list, method_name):
+	"""
+	计算 replication factor
+
+	layer_block: DGL block（包含所有 seed nodes 的入边信息）
+	local_batched_seeds_list: 分区后的 seed nodes 列表
+	method_name: 方法名称（Cherry/Berry/vanilla）
+	"""
+	# 统计每个节点被多少个分区需要
+	node_partition_count = defaultdict(int)
+
+	for partition_id, seeds in enumerate(local_batched_seeds_list):
+		# 获取该分区需要的所有源节点
+		in_edges = layer_block.in_edges(seeds)
+		src_nodes = set(in_edges[0].tolist())  # 源节点
+		seed_set = set(seeds)  # 目标节点
+
+		# 该分区需要的所有节点
+		all_needed_nodes = src_nodes | seed_set
+
+		# 统计每个节点被多少分区需要
+		for node in all_needed_nodes:
+			node_partition_count[node] += 1
+
+	# 计算 replication factor
+	total_nodes = len(node_partition_count)
+	total_references = sum(node_partition_count.values())
+	replication_factor = total_references / total_nodes if total_nodes > 0 else 0
+
+	print(f"=== {method_name} Replication Factor ===")
+	print(f"Total unique nodes: {total_nodes}")
+	print(f"Total references: {total_references}")
+	print(f"Replication Factor: {replication_factor:.4f}")
+	print("=" * 40)
+
+	return replication_factor
 
 
 def get_global_graph_edges_ids_block(raw_graph, block):
-	
+	"""
+		将 block 中局部的节点和边的 id 转为全局的
+	"""
+	## 1. 获取 block 中的边
 	edges=block.edges(order='eid', form='all')
-	edge_src_local = edges[0]
+	edge_src_local = edges[0] # 源节点在 block 中的局部 ID
 	edge_dst_local = edges[1]
-	induced_src = block.srcdata[dgl.NID]
+	## 2. 获取 block 节点与全局节点的映射
+	induced_src = block.srcdata[dgl.NID] # 源节点对应的全局节点 ID 
 	induced_dst = block.dstdata[dgl.NID]
-		
+	## 3. 将局部节点 ID 转换为全局节点 ID
 	raw_src, raw_dst=induced_src[edge_src_local], induced_dst[edge_dst_local]
 	
 	# in homo graph: raw_graph 
+	## 4. 在原始全局图中查找对应的边 ID 
 	global_graph_eids_raw = raw_graph.edge_ids(raw_src, raw_dst)
 	# https://docs.dgl.ai/generated/dgl.DGLGraph.edge_ids.html?highlight=graph%20edge_ids#dgl.DGLGraph.edge_ids
 	# https://docs.dgl.ai/en/0.4.x/generated/dgl.DGLGraph.edge_ids.html#dgl.DGLGraph.edge_ids
@@ -72,6 +116,9 @@ class Graph_Partitioner:
 				print('--------pure    check:     the difference of graph partition res and self.local_output_nids')
 			self.local_batched_seeds_list=res
 
+			# Calculate replication factor for Metis
+			calculate_replication_factor(self.layer_block, res, "Metis")
+
 		elif self.selection_method == "Cherry" or  self.selection_method == "vanilla":
 			print('Out-degree Partition start----................................')
 			t1 = time.time()
@@ -113,6 +160,9 @@ class Graph_Partitioner:
 			print('Partition end ----................................')
 			self.local_batched_seeds_list=res
 
+			# Calculate replication factor for Cherry/vanilla
+			calculate_replication_factor(self.layer_block, res, "Cherry")
+
 		elif self.selection_method == "Berry":
 			print('IODG Partition start----................................')
 			t1 = time.time()
@@ -153,7 +203,10 @@ class Graph_Partitioner:
 				
 			print('IODG Partition end----................................')
 			self.local_batched_seeds_list=res
-		
+
+			# Calculate replication factor for Berry
+			calculate_replication_factor(self.layer_block, res, "Berry")
+
 		return
 
 	def get_src_len(self,seeds):

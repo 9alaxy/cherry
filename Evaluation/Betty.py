@@ -3,6 +3,7 @@ sys.path.insert(0,'..')
 sys.path.insert(0,'..')
 sys.path.insert(0,'../pytorch/utils/')
 sys.path.insert(0,'../pytorch/micro_batch_train/')
+sys.path.insert(0,'../pytorch/micro_batch_train/Betty_file/')
 sys.path.insert(0,'../pytorch/models/')
 
 import dgl

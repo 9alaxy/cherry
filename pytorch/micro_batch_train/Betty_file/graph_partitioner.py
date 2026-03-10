@@ -17,9 +17,48 @@ import sys
 from collections import Counter
 from math import ceil
 from cpu_mem_usage import get_memory
+from collections import defaultdict
 
 # sys.path.insert(0,'..')
 # from draw_graph import draw_dataloader_blocks_pyvis_total, gen_pyvis_graph_local
+
+def calculate_replication_factor(layer_block, local_batched_seeds_list, method_name):
+	"""
+	计算 replication factor
+
+	layer_block: DGL block（包含所有 seed nodes 的入边信息）
+	local_batched_seeds_list: 分区后的 seed nodes 列表
+	method_name: 方法名称（Cherry/Berry/vanilla）
+	"""
+	# 统计每个节点被多少个分区需要
+	node_partition_count = defaultdict(int)
+
+	for partition_id, seeds in enumerate(local_batched_seeds_list):
+		# 获取该分区需要的所有源节点
+		in_edges = layer_block.in_edges(seeds)
+		src_nodes = set(in_edges[0].tolist())  # 源节点
+		seed_set = set(seeds)  # 目标节点
+
+		# 该分区需要的所有节点
+		all_needed_nodes = src_nodes | seed_set
+
+		# 统计每个节点被多少分区需要
+		for node in all_needed_nodes:
+			node_partition_count[node] += 1
+
+	# 计算 replication factor
+	total_nodes = len(node_partition_count)
+	total_references = sum(node_partition_count.values())
+	replication_factor = total_references / total_nodes if total_nodes > 0 else 0
+
+	print(f"=== {method_name} Replication Factor ===")
+	print(f"Total unique nodes: {total_nodes}")
+	print(f"Total references: {total_references}")
+	print(f"Replication Factor: {replication_factor:.4f}")
+	print("=" * 40)
+
+	return replication_factor
+
 
 class Graph_Partitioner:  # ----------------------*** split the output layer block ***---------------------
 	def __init__(self, layer_block, args):
@@ -227,6 +266,7 @@ class Graph_Partitioner:  # ----------------------*** split the output layer blo
 			# print('REG construction  time spent: ', tp1-ts)
 			# print('pure dgl.metis_partition the time spent: ', tp2-tp1)
 			self.local_batched_seeds_list=res
+			calculate_replication_factor(self.layer_block, res, "Betty")
 		return
 
 		# if self.selection_method == "REG" :
