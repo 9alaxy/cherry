@@ -44,6 +44,53 @@ def calculate_replication_factor(layer_block, local_batched_seeds_list, method_n
 	return replication_factor
 
 
+def calculate_edge_cut(layer_block, local_batched_seeds_list, method_name):
+	"""
+	计算 edge cut - 分区边界上的边数量
+
+	layer_block: DGL block（包含所有 seed nodes 的入边信息）
+	local_batched_seeds_list: 分区后的 seed nodes 列表
+	method_name: 方法名称
+	"""
+	# 为每个节点分配分区 ID
+	node_to_partition = {}
+	for partition_id, seeds in enumerate(local_batched_seeds_list):
+		seed_set = set(seeds.tolist() if isinstance(seeds, torch.Tensor) else seeds)
+		for node in seed_set:
+			node_to_partition[node] = partition_id
+
+	# 统计跨分区的边
+	edge_cut_count = 0
+	partition_edge_counts = {}  # 每个分区的边数
+
+	for partition_id, seeds in enumerate(local_batched_seeds_list):
+		seeds = seeds.tolist() if isinstance(seeds, torch.Tensor) else seeds
+		in_edges = layer_block.in_edges(seeds)
+		src_nodes = in_edges[0].tolist()
+		dst_nodes = in_edges[1].tolist()
+
+		partition_edge_counts[partition_id] = len(src_nodes)
+
+		for src, dst in zip(src_nodes, dst_nodes):
+			src_partition = node_to_partition.get(src, -1)
+			dst_partition = node_to_partition.get(dst, -1)
+			# 如果源节点和目标节点在不同分区，则是 edge cut
+			if src_partition != dst_partition and src_partition >= 0 and dst_partition >= 0:
+				edge_cut_count += 1
+
+	# 计算总边数
+	total_edges = sum(partition_edge_counts.values())
+	edge_cut_ratio = edge_cut_count / total_edges if total_edges > 0 else 0
+
+	print(f"=== {method_name} Edge Cut ===")
+	print(f"Total edges: {total_edges}")
+	print(f"Edge cut: {edge_cut_count}")
+	print(f"Edge cut ratio: {edge_cut_ratio:.4f}")
+	print("=" * 40)
+
+	return edge_cut_count, edge_cut_ratio
+
+
 def get_global_graph_edges_ids_block(raw_graph, block):
 	"""
 		将 block 中局部的节点和边的 id 转为全局的
@@ -116,8 +163,9 @@ class Graph_Partitioner:
 				print('--------pure    check:     the difference of graph partition res and self.local_output_nids')
 			self.local_batched_seeds_list=res
 
-			# Calculate replication factor for Metis
+			# Calculate replication factor and edge cut for Metis
 			calculate_replication_factor(self.layer_block, res, "Metis")
+			calculate_edge_cut(self.layer_block, res, "Metis")
 
 		elif self.selection_method == "Cherry" or  self.selection_method == "vanilla":
 			print('Out-degree Partition start----................................')
@@ -160,8 +208,9 @@ class Graph_Partitioner:
 			print('Partition end ----................................')
 			self.local_batched_seeds_list=res
 
-			# Calculate replication factor for Cherry/vanilla
+			# Calculate replication factor and edge cut for Cherry/vanilla
 			calculate_replication_factor(self.layer_block, res, "Cherry")
+			calculate_edge_cut(self.layer_block, res, "Cherry")
 
 		elif self.selection_method == "Berry":
 			print('IODG Partition start----................................')
@@ -204,8 +253,9 @@ class Graph_Partitioner:
 			print('IODG Partition end----................................')
 			self.local_batched_seeds_list=res
 
-			# Calculate replication factor for Berry
+			# Calculate replication factor and edge cut for Berry
 			calculate_replication_factor(self.layer_block, res, "Berry")
+			calculate_edge_cut(self.layer_block, res, "Berry")
 
 		return
 
