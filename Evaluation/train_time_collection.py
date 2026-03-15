@@ -1,6 +1,13 @@
 import csv
 
 def train_time_collection(log_file):
+    """Collect time breakdown from log file.
+
+    Returns:
+        List of [data_loading_time, compute_time, total_time]
+        where data_loading_time = sampling_time + load_block_time + block_move_time
+    """
+    sampling = []
     load_block = []
     block_move = []
     forward = []
@@ -9,7 +16,9 @@ def train_time_collection(log_file):
 
     with open(log_file) as file:
         for line in file:
-            if 'load_block_time:' in line.strip():
+            if 'sampling_time:' in line.strip():
+                sampling.append(float(line.split()[-1]))
+            elif 'load_block_time:' in line.strip():
                 load_block.append(float(line.split()[-1]))
             elif 'block_move_time:' in line.strip():
                 block_move.append(float(line.split()[-1]))
@@ -19,14 +28,31 @@ def train_time_collection(log_file):
                 backward.append(float(line.split()[-1]))
             elif 'total_time:' in line.strip():
                 total.append(float(line.split()[-1]))
-    
+
     time = []
-    time.append(sum(load_block)/len(load_block) + sum(block_move)/len(block_move))
-    time.append(sum(forward)/len(forward))
-    time.append(sum(backward)/len(backward))
-    time.append(sum(total)/len(total))
-    
+    # Data loading time = sampling + load_block + block_move
+    data_loading = 0
+    if sampling:
+        data_loading += sum(sampling) / len(sampling)
+    if load_block:
+        data_loading += sum(load_block) / len(load_block)
+    if block_move:
+        data_loading += sum(block_move) / len(block_move)
+
+    # Compute time = forward + backward
+    compute_time = 0
+    if forward:
+        compute_time += sum(forward) / len(forward)
+    if backward:
+        compute_time += sum(backward) / len(backward)
+
+    time.append(data_loading)
+    time.append(compute_time)
+    if total:
+        time.append(sum(total) / len(total))
+
     return time
+
 
 if __name__ == "__main__":
     all_time = []
@@ -36,7 +62,7 @@ if __name__ == "__main__":
     for mtd in method:
         log_file = f'./log/ogbn-products/{mtd}-4-batch-3-layer-256-hid-SAGE-ogbn-products.log'
         all_time.append(train_time_collection(log_file))
-    
+
     file_name = './data_collection/train_time_breakdown.csv'
 
     with open(file_name, 'w', newline='') as csv_file:

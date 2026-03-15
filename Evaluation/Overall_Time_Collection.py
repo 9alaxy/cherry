@@ -19,7 +19,7 @@ def total_time_collection(log_file):
 
 if __name__ == "__main__":
     dataset = ['reddit', 'ogbn-arxiv', 'ogbn-products']
-    method = ['vanilla']
+    method = ['berry']
     model = ['SAGE', 'GCN', 'GAT']
     total_time = []
 
@@ -28,15 +28,15 @@ if __name__ == "__main__":
         for md in model:
             temp_time = []
             for mtd in method:
-                log_file = path + f'{mtd}-8-batch-3-layer-'
+                log_file = path + f'{mtd}-4-batch-2-layer-'
                 if md == 'GAT':
                     log_file = log_file + f'128-hid-{md}-{da}.log'
                 else:
-                    log_file = log_file + f'256-hid-{md}-{da}.log'
+                    log_file = log_file + f'64-hid-{md}-{da}.log'
                 temp_time.append(total_time_collection(log_file))
             total_time.append(temp_time)
     
-    file_name = './data_collection/vanilla_time.csv'
+    file_name = './data_collection/berry_time.csv'
 
     with open(file_name, 'w', newline='') as csv_file:
         writer = csv.writer(csv_file)

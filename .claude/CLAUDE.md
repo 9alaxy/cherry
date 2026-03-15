@@ -146,16 +146,6 @@ Edit `pytorch/utils/load_graph.py` to configure dataset storage paths. The proje
 - Reddit dataset
 - Amazon dataset (manual download required from GraphSAINT)
 
-## Key Parameters
-
-- `--num-batch`: Number of micro-batches
-- `--selection-method`: Cherry (proposed) / vanilla / Metis / Random
-- `--re-partition-method`: Graph re-partitioning strategy
-- `--fan-out`: Neighborhood sampling sizes for GNN layers
-- `--GPUmem`: Enable GPU memory optimization
-- `--load-full-batch`: Whether to load full graph batches
-- `--num-runs`: Number of runs for averaging results
-
 ## Experiment Recording
 
 **IMPORTANT: After completing each experiment, always record it:**
@@ -190,12 +180,11 @@ Edit `pytorch/utils/load_graph.py` to configure dataset storage paths. The proje
 │   ├── models/               # GNN model implementations
 │   └── utils/                # Utility functions
 ├── test/                      # Test scripts
-├── cherry.md                  # Project description and innovation points
 ├── environment.yml            # Conda environment configuration
 └── requirements.sh            # Additional requirements
 ```
 
-## Testing
+## Testing For .py in profile folder
 
 ```bash
 # Run performance analysis tests

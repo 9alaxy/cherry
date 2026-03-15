@@ -17,7 +17,7 @@ for da in ${data[@]}
 do
     save_path=./log/${model}/${da}
     mkdir -p $save_path
-    save_name=mini-${nb}-batch-${layer}-layer-${hid}-hid-${model}-${da}-${agg}-${fan_out}.log
+    save_name=mini_${nb}batch_${layer}layer_${hidden}hid_${model}_${da}.log
     echo $save_name
     python3 mini_batch_train.py \
         --dataset $da \

@@ -29,7 +29,7 @@ do
             do
                 for nb in ${num_batch[@]}
                 do
-                    save_name=${mtd}-${nb}-batch-${layer}-layer-${hid}-hid-${mdl}-${da}.log
+                    save_name=${mtd}_${nb}batch_${layer}layer_${hidden}hid_${mdl}_${da}.log
                     echo $save_name
                     python3 micro_batch_train.py \
                         --dataset $da \
@@ -109,7 +109,7 @@ done
 #         do
 #             for nb in ${num_batch[@]}
 #             do
-#                 save_name=${mtd}-${nb}-batch-${layer}-layer-${hid}-hid-${mdl}-${da}.log
+#                 save_name=${mtd}_${nb}batch_${layer}layer_${hidden}hid_${mdl}_${da}.log
 #                 echo $save_name
 #                 python3 micro_batch_train.py \
 #                     --dataset $da \
@@ -152,7 +152,7 @@ done
 #         do
 #             for nb in ${num_batch[@]}
 #             do
-#                 save_name=${mtd}-${nb}-batch-${layer}-layer-${hid}-hid-${mdl}-${da}.log
+#                 save_name=${mtd}_${nb}batch_${layer}layer_${hidden}hid_${mdl}_${da}.log
 #                 echo $save_name
 #                 python3 micro_batch_train.py \
 #                     --dataset $da \

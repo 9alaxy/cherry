@@ -24,7 +24,7 @@ do
     do
         for nb in ${num_batch[@]}
         do
-            save_name=${method}-${nb}-batch-${layer}-layer-${hid}-hid-${model}-${da}-ics.log
+            save_name=${method}_${nb}batch_${layer}layer_${hidden}hid_${model}_${da}.log
             echo $save_name
             python3 Betty.py \
                 --dataset $da \
@@ -77,7 +77,7 @@ do
     do
         for nb in ${num_batch[@]}
         do
-            save_name=${method}-${nb}-batch-${layer}-layer-${hid}-hid-${model}-${da}-ics.log
+            save_name=${method}_${nb}batch_${layer}layer_${hidden}hid_${model}_${da}.log
             echo $save_name
             python3 micro_batch_train.py \
                 --dataset $da \
@@ -115,7 +115,7 @@ do
         do
             for nb in ${num_batch[@]}
             do
-                save_name=${method}-${nb}-batch-${layer}-layer-${hid}-hid-${md}-${da}-ics.log
+                save_name=${method}_${nb}batch_${layer}layer_${hidden}hid_${md}_${da}.log
                 echo $save_name
                 python3 vanilla_cherry.py \
                     --dataset $da \
