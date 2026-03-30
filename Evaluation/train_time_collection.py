@@ -55,18 +55,22 @@ def train_time_collection(log_file):
 
 
 if __name__ == "__main__":
+    import argparse
+    import os
+
+    parser = argparse.ArgumentParser(description="Collect time breakdown from log files")
+    parser.add_argument("--log-files", nargs="+", required=True, help="Log file paths")
+    parser.add_argument("--output", required=True, help="Output CSV file path")
+    args = parser.parse_args()
+
+    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+
     all_time = []
-
-    method = ['REG', 'Cherry']
-
-    for mtd in method:
-        log_file = f'./log/ogbn-products/{mtd}-4-batch-3-layer-256-hid-SAGE-ogbn-products.log'
+    for log_file in args.log_files:
         all_time.append(train_time_collection(log_file))
 
-    file_name = './data_collection/train_time_breakdown.csv'
-
-    with open(file_name, 'w', newline='') as csv_file:
+    with open(args.output, 'w', newline='') as csv_file:
         writer = csv.writer(csv_file)
         writer.writerows(all_time)
 
-    print("saved in ", file_name)
+    print("saved in", args.output)

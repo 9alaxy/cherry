@@ -14,6 +14,7 @@ import time
 import argparse
 import random
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from cherry_graph_partitioner import Graph_Partitioner, get_global_graph_edges_ids_block
@@ -27,6 +28,7 @@ from utils import Logger
 
 
 def _memory_segment_key(args):
+	"""根据模型类型返回内存回归分段键。"""
 	if args.model == 'GAT':
 		return 'gat'
 	if args.model == 'SAGE' and args.aggre.lower() == 'lstm':
@@ -35,6 +37,7 @@ def _memory_segment_key(args):
 
 
 def _extract_memory_features(blocks, args, nfeat_dim):
+	"""从采样得到的 blocks 中提取内存估计特征向量与统计量。"""
 	num_input_nodes = len(blocks[0].srcdata[dgl.NID])
 	num_output_nodes = len(blocks[-1].dstdata[dgl.NID])
 	edge_count_sum = sum(int(block.num_edges()) for block in blocks)
@@ -65,6 +68,7 @@ def _extract_memory_features(blocks, args, nfeat_dim):
 
 
 def _load_beta_model(beta_path):
+	"""从 JSON 文件加载内存回归系数 beta。"""
 	path = Path(beta_path)
 	if not path.exists():
 		return {}
@@ -78,6 +82,7 @@ def _load_beta_model(beta_path):
 
 
 def _save_beta_model(beta_path, beta_dict, sample_count):
+	"""将拟合后的 beta 系数及元数据保存到 JSON 文件。"""
 	path = Path(beta_path)
 	path.parent.mkdir(parents=True, exist_ok=True)
 	payload = {
@@ -91,6 +96,7 @@ def _save_beta_model(beta_path, beta_dict, sample_count):
 
 
 def _append_profile_sample(profile_path, sample):
+	"""将单条内存画像样本追加写入 JSONL 文件。"""
 	path = Path(profile_path)
 	path.parent.mkdir(parents=True, exist_ok=True)
 	with path.open('a', encoding='utf-8') as f:
@@ -98,6 +104,7 @@ def _append_profile_sample(profile_path, sample):
 
 
 def _load_profile_samples(profile_path):
+	"""从 JSONL 文件读取内存画像样本列表。"""
 	path = Path(profile_path)
 	if not path.exists():
 		return []
@@ -115,6 +122,7 @@ def _load_profile_samples(profile_path):
 
 
 def _fit_beta_from_samples(samples):
+	"""按分段对样本做最小二乘拟合，得到 beta 系数。"""
 	segment_samples = {'sum': [], 'gat': [], 'lstm': []}
 	for sample in samples:
 		segment = sample.get('segment', 'sum')
@@ -136,6 +144,7 @@ def _fit_beta_from_samples(samples):
 
 
 def _estimate_with_beta(x_k, segment, beta_dict):
+	"""使用分段 beta 对特征向量进行线性内存估计。"""
 	beta = beta_dict.get(segment)
 	if not beta or len(beta) != len(x_k):
 		return None
@@ -143,10 +152,11 @@ def _estimate_with_beta(x_k, segment, beta_dict):
 
 
 def _profile_real_peak_memory_gb(model, blocks, nfeats, labels, device, args):
+	"""通过一次前向+反向实际测量该微批次的 CUDA 峰值显存（GB）。"""
 	if not torch.cuda.is_available() or 'cuda' not in str(device):
 		return None
 
-	criterion = nn.CrossEntropyLoss()
+	criterion = nn.BCEWithLogitsLoss() if args.dataset == 'amazon' else nn.CrossEntropyLoss()
 	was_training = model.training
 	model.train()
 	model.zero_grad(set_to_none=True)
@@ -160,6 +170,8 @@ def _profile_real_peak_memory_gb(model, blocks, nfeats, labels, device, args):
 	batch_pred = model(blocks_dev, batch_inputs)
 	if args.dataset == 'ogbn-papers100M':
 		loss = criterion(batch_pred, batch_labels.long())
+	elif args.dataset == 'amazon':
+		loss = criterion(batch_pred, batch_labels.float())
 	else:
 		loss = criterion(batch_pred, batch_labels)
 	loss.backward()
@@ -173,9 +185,7 @@ def _profile_real_peak_memory_gb(model, blocks, nfeats, labels, device, args):
 
 
 def _estimate_peak_memory_gb(model, blocks, args, nfeat_dim, num_classes):
-	"""
-	Estimate per-micro-batch peak memory with a lightweight analytical model.
-	"""
+	"""用轻量解析模型估计单个微批次的峰值显存（GB）。"""
 	x_k, stats = _extract_memory_features(blocks, args, nfeat_dim)
 	segment = _memory_segment_key(args)
 
@@ -222,6 +232,7 @@ def _estimate_peak_memory_gb(model, blocks, args, nfeat_dim, num_classes):
 
 
 def _build_micro_dataloader(g, batch_list, fanouts, num_workers):
+	"""为单个微批次构建邻居采样 DataLoader。"""
 	sampler = dgl.dataloading.MultiLayerNeighborSampler(fanouts)
 	return dgl.dataloading.DataLoader(
 		g,
@@ -234,10 +245,49 @@ def _build_micro_dataloader(g, batch_list, fanouts, num_workers):
 	)
 
 
+def _prepare_micro_batch_cpu(micro_idx, block_dataloader, nfeats, labels):
+	"""在 CPU 侧准备一个微批次：采样 blocks 并抽取对应特征与标签。"""
+	t_prepare = time.time()
+	for input_nodes, _, blocks in block_dataloader:
+		batch_inputs = nfeats[blocks[0].srcdata[dgl.NID]]
+		batch_labels = labels[blocks[-1].dstdata[dgl.NID]]
+		prepare_time = time.time() - t_prepare
+		stats = {
+			'micro_idx': micro_idx,
+			'num_input_nids': len(input_nodes),
+			'num_src_node': get_compute_num_nids(blocks),
+			'num_out_node_FL': get_FL_output_num_nids(blocks),
+			'prepare_time': prepare_time,
+		}
+		return {
+			'blocks': blocks,
+			'batch_inputs': batch_inputs,
+			'batch_labels': batch_labels,
+			'stats': stats,
+		}
+
+	# 若 DataLoader 为空，返回空对象，调用方应跳过。
+	return None
+
+
+def _move_micro_batch_to_device(micro_pack, device, dataset, non_blocking=False):
+	"""将 CPU 侧微批次数据搬移到设备侧，并返回搬移耗时。"""
+	t_move = time.time()
+	blocks_dev = [block.int().to(device) for block in micro_pack['blocks']]
+	batch_inputs = micro_pack['batch_inputs'].to(device, non_blocking=non_blocking)
+	batch_labels = micro_pack['batch_labels'].to(device, non_blocking=non_blocking)
+	if torch.cuda.is_available() and 'cuda' in str(device):
+		torch.cuda.synchronize()
+	move_time = time.time() - t_move
+
+	if dataset == 'ogbn-papers100M':
+		batch_labels = batch_labels.long()
+
+	return blocks_dev, batch_inputs, batch_labels, move_time
+
+
 def _memory_aware_partition(g, batched_output_nid_list, model, args, nfeat_dim, num_classes, nfeats, labels, device):
-	"""
-	Evaluate estimated peak memory for each micro-batch and decide whether repartition is needed.
-	"""
+	"""评估各微批次显存峰值估计，并决定是否需要重新划分。"""
 	fanouts = [int(fanout) for fanout in args.fan_out.split(',')]
 	estimated_list = []
 	for micro_idx, batch_list in enumerate(batched_output_nid_list):
@@ -283,6 +333,7 @@ def _memory_aware_partition(g, batched_output_nid_list, model, args, nfeat_dim, 
 
 
 def set_seed(args):
+	"""设置 Python/NumPy/PyTorch/DGL 随机种子，提升结果可复现性。"""
 	random.seed(args.seed)
 	np.random.seed(args.seed)
 	torch.manual_seed(args.seed)
@@ -296,21 +347,12 @@ def set_seed(args):
 
 
 def compute_acc(pred, labels):
-	"""
-	Compute the accuracy of prediction given the labels.
-	"""
+	"""根据预测结果与标签计算分类准确率。"""
 	labels = labels.long()
 	return (torch.argmax(pred, dim=1) == labels).float().sum() / len(pred)
 
 def evaluate(model, g, nfeats, labels, train_nid, val_nid, test_nid, device, args):
-	"""
-	Evaluate the model on the validation set specified by ``val_nid``.
-	g : The entire graph.
-	inputs : The features of all the nodes.
-	labels : The labels of all the nodes.
-	val_nid : the node Ids for validation.
-	device : The GPU device to evaluate on.
-	"""
+	"""在全图上执行推理并返回 train/val/test 三个划分的准确率。"""
 	nfeats=nfeats.to(device)
 	g=g.to(device)
 	# print('device ', device)
@@ -327,9 +369,7 @@ def evaluate(model, g, nfeats, labels, train_nid, val_nid, test_nid, device, arg
 
 
 def load_block_subtensor(nfeat, labels, blocks, device,args):
-	"""
-	Extracts features and labels for a subset of nodes
-	"""
+	"""按当前 blocks 抽取输入特征和目标标签，并搬移到指定设备。"""
 
 	# if args.GPUmem:
 	# 	see_memory_usage("----------------------------------------before batch input features to device")
@@ -342,6 +382,7 @@ def load_block_subtensor(nfeat, labels, blocks, device,args):
 	return batch_inputs, batch_labels
 
 def get_compute_num_nids(blocks):
+	"""统计一个微批次中所有层参与计算的源节点总数。"""
 	res=0
 	for b in blocks:
 		res+=len(b.srcdata['_ID'])
@@ -349,11 +390,13 @@ def get_compute_num_nids(blocks):
 
 	
 def get_FL_output_num_nids(blocks):
+	"""统计第一层输出节点数量。"""
 	
 	output_fl =len(blocks[0].dstdata['_ID'])
 	return output_fl
 
 def _partition_train_nodes_once(g, train_nid, args):
+	"""执行一次训练节点划分，返回微批次节点列表及对应权重。"""
 	max_neighbor = g.in_degrees(train_nid).max()
 	print("max_neighbor: ", max_neighbor)
 	
@@ -409,6 +452,7 @@ def _partition_train_nodes_once(g, train_nid, args):
 
 
 def gen_micro_batch(g, train_nid, args, model, nfeat_dim, num_classes, nfeats, labels, device):
+	"""基于划分策略生成微批次，并可按显存预算自适应增加批次数。"""
 	base_num_batch = args.num_batch
 	batch_step = 0
 	t1 = time.time()
@@ -479,6 +523,7 @@ def gen_micro_batch(g, train_nid, args, model, nfeat_dim, num_classes, nfeats, l
 	return batched_output_nid_list, weights_list
 
 def gen_model(args, in_feats, out_feats, device):
+	"""根据参数选择并构建对应的 GNN 模型。"""
 	if args.model == "SAGE":
 		model = GraphSAGE(
 			in_feats,
@@ -513,6 +558,7 @@ def gen_model(args, in_feats, out_feats, device):
 
 #### Entry point
 def run(args, device, data):
+	"""执行训练主流程：划分微批次、训练循环与评估统计。"""
 	# Unpack data
 	g, nfeats, labels, n_classes, train_nid, val_nid, test_nid = data
 	in_feats = len(nfeats[0])
@@ -562,7 +608,7 @@ def run(args, device, data):
 
 	for run in range(args.num_runs):
 		model.reset_parameters()
-		criterion = nn.CrossEntropyLoss()
+		criterion = nn.BCEWithLogitsLoss() if args.dataset == 'amazon' else nn.CrossEntropyLoss()
 		optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 		for epoch in range(args.num_epochs):
 			print("EPOCH BEGIN-----------------------------")
@@ -580,45 +626,115 @@ def run(args, device, data):
 			block_move_time = []
 			model_time = []
 			loss_time = []
+			prefetch_wait_time = []
 			opt_time = []
-			
-			for micro_idx, block_dataloader in enumerate(batch_dataloaders):
-				# torch.cuda.empty_cache()
-				torch.cuda.reset_max_memory_allocated()
-				torch.cuda.synchronize() # synchronized
-				for step, (input_nodes, seeds, blocks) in enumerate(block_dataloader):
-					num_input_nids	+= len(input_nodes)
-					num_src_node+=get_compute_num_nids(blocks)
-					num_out_node_FL+=get_FL_output_num_nids(blocks)
 
-					t1 = time.time()
-					batch_inputs, batch_labels = load_block_subtensor(nfeats, labels, blocks, device,args)
-					t3 = time.time()
-					load_block_time.append(t3 - t1)
-					blocks = [block.int().to(device) for block in blocks]
+			use_async_prefetch = bool(args.async_prefetch)
+			micro_count = len(batch_dataloaders)
+
+			if use_async_prefetch:
+				print("Async prefetch enabled | workers={} | non_blocking_copy={}".format(
+					args.prefetch_workers,
+					args.prefetch_non_blocking,
+				))
+				worker_num = max(int(args.prefetch_workers), 1)
+				prefetch_pool = ThreadPoolExecutor(max_workers=worker_num)
+				future_map = {}
+
+				for micro_idx in range(micro_count):
+					future_map[micro_idx] = prefetch_pool.submit(
+						_prepare_micro_batch_cpu,
+						micro_idx,
+						batch_dataloaders[micro_idx],
+						nfeats,
+						labels,
+					)
+
+				for micro_idx in range(micro_count):
+					t_wait = time.time()
+					micro_pack = future_map[micro_idx].result()
+					prefetch_wait_time.append(time.time() - t_wait)
+					if micro_pack is None:
+						continue
+
+					load_block_time.append(micro_pack['stats']['prepare_time'])
+					num_input_nids += micro_pack['stats']['num_input_nids']
+					num_src_node += micro_pack['stats']['num_src_node']
+					num_out_node_FL += micro_pack['stats']['num_out_node_FL']
+
+					# torch.cuda.empty_cache()
+					torch.cuda.reset_max_memory_allocated()
 					torch.cuda.synchronize() # synchronized
+
+					blocks, batch_inputs, batch_labels, move_t = _move_micro_batch_to_device(
+						micro_pack,
+						device,
+						args.dataset,
+						non_blocking=args.prefetch_non_blocking,
+					)
+					block_move_time.append(move_t)
+
 					t4 = time.time()
-					block_move_time.append(t4 - t3)
 					batch_pred = model(blocks, batch_inputs)
 					torch.cuda.synchronize() # synchronized
 					t5 = time.time()
 					model_time.append(t5 - t4)
-					
-					if args.dataset=='ogbn-papers100M':
-						pseudo_mini_loss = criterion(batch_pred, batch_labels.long())
-					else:
-						pseudo_mini_loss = criterion(batch_pred, batch_labels)
-					pseudo_mini_loss = pseudo_mini_loss*weights_list[step]
+
+					pseudo_mini_loss = criterion(batch_pred, batch_labels)
+					pseudo_mini_loss = pseudo_mini_loss * weights_list[micro_idx]
 					pseudo_mini_loss.backward()
-					
+
 					loss_sum += pseudo_mini_loss
-					
+
 					torch.cuda.synchronize() # synchronized
 					t2 = time.time()
 					loss_time.append(t2 - t5)
-					
+
 					max_memory_allocated = torch.cuda.max_memory_allocated() / (1024 * 1024 * 1024)
 					print("Micro-batch-", micro_idx, " max memory allocated: ", max_memory_allocated, " GB")
+
+				prefetch_pool.shutdown(wait=True)
+			else:
+				for micro_idx, block_dataloader in enumerate(batch_dataloaders):
+					# torch.cuda.empty_cache()
+					torch.cuda.reset_max_memory_allocated()
+					torch.cuda.synchronize() # synchronized
+					for _, (_, _, blocks) in enumerate(block_dataloader):
+						num_input_nids += len(blocks[0].srcdata[dgl.NID])
+						num_src_node += get_compute_num_nids(blocks)
+						num_out_node_FL += get_FL_output_num_nids(blocks)
+
+						t1 = time.time()
+						batch_inputs, batch_labels = load_block_subtensor(nfeats, labels, blocks, device,args)
+						t3 = time.time()
+						load_block_time.append(t3 - t1)
+						blocks = [block.int().to(device) for block in blocks]
+						torch.cuda.synchronize() # synchronized
+						t4 = time.time()
+						block_move_time.append(t4 - t3)
+						batch_pred = model(blocks, batch_inputs)
+						torch.cuda.synchronize() # synchronized
+						t5 = time.time()
+						model_time.append(t5 - t4)
+
+						if args.dataset=='ogbn-papers100M':
+							pseudo_mini_loss = criterion(batch_pred, batch_labels.long())
+						elif args.dataset=='amazon':
+							pseudo_mini_loss = criterion(batch_pred, batch_labels.float())
+						else:
+							pseudo_mini_loss = criterion(batch_pred, batch_labels)
+						pseudo_mini_loss = pseudo_mini_loss * weights_list[micro_idx]
+						pseudo_mini_loss.backward()
+
+						loss_sum += pseudo_mini_loss
+
+						torch.cuda.synchronize() # synchronized
+						t2 = time.time()
+						loss_time.append(t2 - t5)
+
+						max_memory_allocated = torch.cuda.max_memory_allocated() / (1024 * 1024 * 1024)
+						print("Micro-batch-", micro_idx, " max memory allocated: ", max_memory_allocated, " GB")
+						break
 			
 			torch.cuda.synchronize() # synchronized
 			opt_t = time.time()
@@ -644,6 +760,8 @@ def run(args, device, data):
 				print(' Run '+str(run)+'| Epoch '+ str( epoch)+' |')
 
 			print("TIME RECORD-----------------------------")
+			if use_async_prefetch:
+				print("prefetch_wait_time: ", sum(prefetch_wait_time))
 			print("load_block_time: ", sum(load_block_time))
 			print("block_move_time: ", sum(block_move_time))
 			print("model_time: ", sum(model_time))
@@ -657,6 +775,7 @@ def run(args, device, data):
 
 	
 def count_parameters(model):
+	"""打印模型参数总量及可训练/不可训练参数明细。"""
 	pytorch_total_params = sum(torch.numel(p) for p in model.parameters())
 	print('total model parameters size ', pytorch_total_params)
 	print('trainable parameters')
@@ -671,6 +790,7 @@ def count_parameters(model):
 			print (name, param.data.shape)
 
 def main():
+	"""解析命令行参数、加载数据并启动训练入口。"""
 	tt = time.time()
 	print("main start at this time " + str(tt))
 	argparser = argparse.ArgumentParser("multi-gpu training")
@@ -710,6 +830,9 @@ def main():
 	argparser.add_argument('--memory-fit-beta', action='store_true')
 	argparser.add_argument('--memory-beta-path', type=str, default='Evaluation/berry/memory_beta.json')
 	argparser.add_argument('--memory-calibrate-only', action='store_true')
+	argparser.add_argument('--async-prefetch', action='store_true')
+	argparser.add_argument('--prefetch-workers', type=int, default=2)
+	argparser.add_argument('--prefetch-non-blocking', action='store_true')
 	
 	args = argparser.parse_args()
 

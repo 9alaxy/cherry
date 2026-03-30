@@ -1,0 +1,129 @@
+log_dir: ./mem/layer
+
+experiments:
+# gcn
+  - name: ogbn_gcn_layer_1
+    device_number: 0
+    epoch: 5
+    fan_out: "10"
+    layer: 1
+    hid: 256
+    data: ogbn-products
+    model: GCN
+    nb: 1
+
+  - name: ogbn_gcn_layer_2
+    device_number: 0
+    epoch: 5
+    fan_out: "10,25"
+    layer: 1
+    hid: 256
+    data: ogbn-products
+    model: GCN
+    nb: 1
+  
+  - name: ogbn_gcn_layer_3
+    device_number: 0
+    epoch: 5
+    fan_out: "10,25,30"
+    layer: 1
+    hid: 256
+    data: ogbn-products
+    model: GCN
+    nb: 1
+
+  - name: ogbn_gcn_layer_4
+    device_number: 0
+    epoch: 5
+    fan_out: "10,25,30,40"
+    layer: 1
+    hid: 256
+    data: ogbn-products
+    model: GCN
+    nb: 1
+
+# gat
+  - name: ogbn_gat_layer_1
+    device_number: 0
+    epoch: 5
+    fan_out: "10"
+    layer: 1
+    hid: 256
+    data: ogbn-products
+    model: GAT
+    nb: 1
+  
+  - name: ogbn_gat_layer_2
+    device_number: 0
+    epoch: 5
+    fan_out: "10,25"
+    layer: 2
+    hid: 256
+    data: ogbn-products
+    model: GAT
+    nb: 1
+
+  - name: ogbn_gat_layer_3
+    device_number: 0
+    epoch: 5
+    fan_out: "10,25,30"
+    layer: 3
+    hid: 256
+    data: ogbn-products
+    model: GAT
+    nb: 1
+
+  - name: ogbn_gat_layer_4
+    device_number: 0
+    epoch: 5
+    fan_out: "10,25,30,40"
+    layer: 4
+    hid: 256
+    data: ogbn-products
+    model: GAT
+    nb: 1
+
+#sage
+  - name: ogbn_sage_mean_1
+    device_number: 0
+    epoch: 5
+    fan_out: "10"
+    layer: 1
+    hid: 256
+    data: ogbn-products
+    model: SAGE
+    agg: mean
+    nb: 1
+
+  - name: ogbn_sage_mean_2
+    device_number: 0
+    epoch: 5
+    fan_out: "10,25"
+    layer: 2
+    hid: 256
+    data: ogbn-products
+    model: SAGE
+    agg: mean
+    nb: 1
+
+  - name: ogbn_sage_mean_3
+    device_number: 0
+    epoch: 5
+    fan_out: "10,25,30"
+    layer: 3
+    hid: 256
+    data: ogbn-products
+    model: SAGE
+    agg: mean
+    nb: 1
+
+  - name: ogbn_sage_mean_4
+    device_number: 0
+    epoch: 5
+    fan_out: "10,25,30,40"
+    layer: 4
+    hid: 256
+    data: ogbn-products
+    model: SAGE
+    agg: mean
+    nb: 1

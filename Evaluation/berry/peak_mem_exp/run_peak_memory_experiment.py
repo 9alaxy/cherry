@@ -23,7 +23,7 @@ METHOD_MAP = {
     "Betty": {"entry": "Betty.py", "args": ["--selection-method", "REG", "--re-partition-method", "REG"]},
 }
 
-DATASETS = ["reddit", "ogbn-arxiv", "ogbn-products", "amazon", "ogbn-papers100M"]
+DATASETS = ["reddit", "ogbn-arxiv", "ogbn-products", "amazon", "ogbn-papers100M", "cora"]
 MODELS = ["SAGE", "GCN", "GAT"]
 METHODS = ["Berry", "Betty", "DGL_random", "DGL_metis"]
 FANOUT_MAP = {
@@ -32,6 +32,7 @@ FANOUT_MAP = {
     "ogbn-products": "10,25,30",
     "amazon": "10,25,30",
     "ogbn-papers100M": "10,25,30",
+    "cora": "10,25,30",
     "karate": "5,5,5",
 }
 

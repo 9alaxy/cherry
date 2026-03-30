@@ -36,7 +36,7 @@ do
             --model $md \
             --aggre mean \
             --load-full-batch False \
-            --eval \
+            # --eval \
             > ${save_path}/${save_name}
     done
 done

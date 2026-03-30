@@ -1,6 +1,9 @@
-mkdir ./ac_log
+mkdir -p ./ac_log
 
 device_number=0
+
+# Log output directory (configurable)
+save_dir=${1:-./ac_log}
 
 num_batch=(4)
 epoch=200
@@ -17,9 +20,9 @@ method=Cherry
 model=(SAGE GCN)
 nb=1
 for da in ${data[@]}
-do  
-    save_path=./ac_log/${da}
-    mkdir $save_path
+do
+    save_path=${save_dir}/${da}
+    mkdir -p $save_path
     for hid in ${hidden[@]}
     do
         for md in ${model[@]}
