@@ -12,6 +12,12 @@ LOG_DIR = EXP_DIR / "log"
 
 METHOD_ORDER = ["Berry", "Betty", "DGL_random", "DGL_metis"]
 MODEL_ORDER = ["GCN", "GAT", "SAGE"]
+METHOD_LABELS = {
+    "Berry": "IODG-Full",
+    "Betty": "Betty",
+    "DGL_random": "随机化分方法",
+    "DGL_metis": "METIS划分方法",
+}
 COLORS = {
     "GCN": "#1f77b4",
     "GAT": "#ff7f0e",
@@ -89,10 +95,10 @@ def main():
             )
 
         ax.set_xticks(x)
-        ax.set_xticklabels(METHOD_ORDER)
-        ax.set_ylabel("Peak Memory (GB)")
-        ax.set_xlabel("Method")
-        ax.set_title(f"{dataset} Peak Memory Comparison{gpu_suffix}")
+        ax.set_xticklabels([METHOD_LABELS.get(m, m) for m in METHOD_ORDER])
+        ax.set_ylabel("峰值显存 (GB)")
+        ax.set_xlabel("模型")
+        ax.set_title(f"{dataset} 显存对比{gpu_suffix}")
         ax.grid(axis="y", linestyle="--", alpha=0.35)
         ax.legend()
         fig.tight_layout()

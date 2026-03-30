@@ -9,8 +9,42 @@ import numpy as np
 import pandas as pd
 
 
+def configure_chinese_font():
+    """Pick the first available CJK-capable font to avoid missing-glyph warnings."""
+    candidates = [
+        'Noto Sans CJK SC',
+        'Noto Sans CJK JP',
+        'Noto Sans SC',
+        'Source Han Sans SC',
+        'Microsoft YaHei',
+        'SimHei',
+        'WenQuanYi Zen Hei',
+        'PingFang SC',
+        'Heiti SC',
+        'Arial Unicode MS',
+    ]
+
+    try:
+        from matplotlib import font_manager
+
+        available = {f.name for f in font_manager.fontManager.ttflist}
+        chosen = next((name for name in candidates if name in available), None)
+    except Exception:
+        chosen = None
+
+    if chosen:
+        plt.rcParams['font.sans-serif'] = [chosen] + candidates
+    else:
+        # Keep a fallback list even if runtime scan fails.
+        plt.rcParams['font.sans-serif'] = candidates
+
+    # Ensure minus signs render properly with CJK fonts.
+    plt.rcParams['axes.unicode_minus'] = False
+
+
 def draw_plot(csv_path: Path, output_prefix: Path, ylim_top: float):
     df = pd.read_csv(csv_path)
+    configure_chinese_font()
 
     # match /workspace/Cherry/Evaluation/mem/aggregator/plot.py font style
     plt.rcParams.update({
@@ -23,7 +57,7 @@ def draw_plot(csv_path: Path, output_prefix: Path, ylim_top: float):
     model_order = ['GCN', 'SAGE', 'GAT']
     model_labels = ['GCN', 'GraphSAGE', 'GAT']
     method_order = ['DGL_random', 'DGL_metis', 'Betty', 'Berry']
-    method_labels = ['dgl_random', 'dgl_metis', 'betty', 'berry']
+    method_labels = ['随机划分方法', 'METIS划分方法', 'Betty', 'IODG-Full']
     method_colors = ['#66c2a5', '#fc8d62', '#8da0cb', '#e78ac3']
     oom_color = '#d1d5db'
 
@@ -93,9 +127,9 @@ def draw_plot(csv_path: Path, output_prefix: Path, ylim_top: float):
     dataset_name = str(df['dataset'].iloc[0]) if not df.empty and 'dataset' in df.columns else 'dataset'
     ax.set_xticks(x)
     ax.set_xticklabels(model_labels)
-    ax.set_xlabel('Model')
-    ax.set_ylabel('Memory (GB)')
-    ax.set_title(f'{dataset_name} Peak Memory')
+    ax.set_xlabel('模型')
+    ax.set_ylabel('显存 (GB)')
+    ax.set_title(f'{dataset_name} 峰值显存')
     ax.grid(axis='y', linestyle='--', alpha=0.3)
     ax.legend(ncol=2, frameon=False)
     ax.set_ylim(0, ylim_top)
