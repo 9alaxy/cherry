@@ -1,0 +1,10 @@
+- different_layer
+- device_number: 0
+  epoch: 5
+  fan_out: "5,5"
+  layer: 2
+  hid: 256
+  data: ogbn-products
+  model: GCN
+  nb: 1
+  num-heads: 1,2,3（OOM）,4

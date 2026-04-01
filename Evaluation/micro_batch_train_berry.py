@@ -16,8 +16,14 @@ import random
 import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from collections import defaultdict
 
-from cherry_graph_partitioner import Graph_Partitioner, get_global_graph_edges_ids_block
+
+from cherry_graph_partitioner import (
+	Graph_Partitioner,
+	get_global_graph_edges_ids_block,
+	calculate_replication_factor,
+)
 from graphsage_model import GraphSAGE
 from gcn_model_cherry import GCN
 from gat_model_cherry import GAT
@@ -245,12 +251,16 @@ def _build_micro_dataloader(g, batch_list, fanouts, num_workers):
 	)
 
 
-def _prepare_micro_batch_cpu(micro_idx, block_dataloader, nfeats, labels):
+def _prepare_micro_batch_cpu(micro_idx, block_dataloader, nfeats, labels, pin_memory=False):
 	"""在 CPU 侧准备一个微批次：采样 blocks 并抽取对应特征与标签。"""
 	t_prepare = time.time()
 	for input_nodes, _, blocks in block_dataloader:
 		batch_inputs = nfeats[blocks[0].srcdata[dgl.NID]]
 		batch_labels = labels[blocks[-1].dstdata[dgl.NID]]
+		if pin_memory and hasattr(batch_inputs, 'pin_memory'):
+			batch_inputs = batch_inputs.pin_memory()
+		if pin_memory and hasattr(batch_labels, 'pin_memory'):
+			batch_labels = batch_labels.pin_memory()
 		prepare_time = time.time() - t_prepare
 		stats = {
 			'micro_idx': micro_idx,
@@ -276,14 +286,36 @@ def _move_micro_batch_to_device(micro_pack, device, dataset, non_blocking=False)
 	blocks_dev = [block.int().to(device) for block in micro_pack['blocks']]
 	batch_inputs = micro_pack['batch_inputs'].to(device, non_blocking=non_blocking)
 	batch_labels = micro_pack['batch_labels'].to(device, non_blocking=non_blocking)
-	if torch.cuda.is_available() and 'cuda' in str(device):
-		torch.cuda.synchronize()
 	move_time = time.time() - t_move
 
 	if dataset == 'ogbn-papers100M':
 		batch_labels = batch_labels.long()
 
 	return blocks_dev, batch_inputs, batch_labels, move_time
+
+
+def _enqueue_micro_batch_to_device(micro_pack, device, dataset, copy_stream, non_blocking=False):
+	"""在指定 CUDA stream 上异步提交特征/标签搬运，并返回完成事件。"""
+	t_move = time.time()
+	with torch.cuda.stream(copy_stream):
+		batch_inputs = micro_pack['batch_inputs'].to(device, non_blocking=non_blocking)
+		batch_labels = micro_pack['batch_labels'].to(device, non_blocking=non_blocking)
+		if dataset == 'ogbn-papers100M':
+			batch_labels = batch_labels.long()
+
+	move_time = time.time() - t_move
+	ready_event = torch.cuda.Event()
+	ready_event.record(copy_stream)
+	return {
+		'micro_idx': micro_pack['stats']['micro_idx'],
+		'blocks_cpu': micro_pack['blocks'],
+		'batch_inputs': batch_inputs,
+		'batch_labels': batch_labels,
+		'move_time': move_time,
+		'ready_event': ready_event,
+		# keep pinned CPU src tensors alive until wait_event + compute starts
+		'_src_refs': (micro_pack['batch_inputs'], micro_pack['batch_labels']),
+	}
 
 
 def _memory_aware_partition(g, batched_output_nid_list, model, args, nfeat_dim, num_classes, nfeats, labels, device):
@@ -437,6 +469,18 @@ def _partition_train_nodes_once(g, train_nid, args):
 			batched_output_nid_list.append(train_nid[start_index:end_index])
 			weights_list.append((end_index - start_index)/len(train_nid))
 			start_index = end_index
+		# Keep metric definition consistent across methods.
+		for _, (_, _, full_blocks) in enumerate(full_batch_dataloader):
+			layer_block = list(reversed(full_blocks))[0]
+			dst_global = layer_block.dstdata['_ID'].tolist()
+			global_to_local = {int(gid): idx for idx, gid in enumerate(dst_global)}
+			local_batched = []
+			for seeds in batched_output_nid_list:
+				seed_list = seeds.tolist() if hasattr(seeds, 'tolist') else list(seeds)
+				local_seeds = [global_to_local[int(s)] for s in seed_list if int(s) in global_to_local]
+				local_batched.append(local_seeds)
+			calculate_replication_factor(layer_block, local_batched, "Range")
+			break
 	elif args.selection_method == 'Random':
 		train_nid_list = list(train_nid)
 		random.shuffle(train_nid_list)
@@ -447,6 +491,18 @@ def _partition_train_nodes_once(g, train_nid, args):
 			batched_output_nid_list.append(train_nid_list[start_index:end_index])
 			weights_list.append((end_index - start_index)/len(train_nid))
 			start_index = end_index
+		# Keep metric definition consistent across methods.
+		for _, (_, _, full_blocks) in enumerate(full_batch_dataloader):
+			layer_block = list(reversed(full_blocks))[0]
+			dst_global = layer_block.dstdata['_ID'].tolist()
+			global_to_local = {int(gid): idx for idx, gid in enumerate(dst_global)}
+			local_batched = []
+			for seeds in batched_output_nid_list:
+				seed_list = seeds.tolist() if hasattr(seeds, 'tolist') else list(seeds)
+				local_seeds = [global_to_local[int(s)] for s in seed_list if int(s) in global_to_local]
+				local_batched.append(local_seeds)
+			calculate_replication_factor(layer_block, local_batched, "Random")
+			break
 		
 	return batched_output_nid_list, weights_list
 
@@ -640,6 +696,8 @@ def run(args, device, data):
 				worker_num = max(int(args.prefetch_workers), 1)
 				prefetch_pool = ThreadPoolExecutor(max_workers=worker_num)
 				future_map = {}
+				use_cuda_pipeline = torch.cuda.is_available() and ('cuda' in str(device))
+				copy_stream = torch.cuda.Stream(device=device) if use_cuda_pipeline else None
 
 				for micro_idx in range(micro_count):
 					future_map[micro_idx] = prefetch_pool.submit(
@@ -648,50 +706,113 @@ def run(args, device, data):
 						batch_dataloaders[micro_idx],
 						nfeats,
 						labels,
+						args.prefetch_non_blocking,
 					)
+
+				def _stage_one(m_idx):
+					t_wait = time.time()
+					m_pack = future_map[m_idx].result()
+					prefetch_wait_time.append(time.time() - t_wait)
+					if m_pack is None:
+						return None
+					load_block_time.append(m_pack['stats']['prepare_time'])
+					num_stats = m_pack['stats']
+					return m_pack, num_stats
+
+				staged_dev_pack = None
+				if micro_count > 0:
+					first = _stage_one(0)
+					if first is not None:
+						micro_pack, num_stats = first
+						num_input_nids += num_stats['num_input_nids']
+						num_src_node += num_stats['num_src_node']
+						num_out_node_FL += num_stats['num_out_node_FL']
+						torch.cuda.reset_max_memory_allocated()
+						if use_cuda_pipeline:
+							staged_dev_pack = _enqueue_micro_batch_to_device(
+								micro_pack,
+								device,
+								args.dataset,
+								copy_stream,
+								non_blocking=args.prefetch_non_blocking,
+							)
+						else:
+							blocks, batch_inputs, batch_labels, move_t = _move_micro_batch_to_device(
+								micro_pack,
+								device,
+								args.dataset,
+								non_blocking=args.prefetch_non_blocking,
+							)
+							staged_dev_pack = {
+								'micro_idx': micro_pack['stats']['micro_idx'],
+								'blocks': blocks,
+								'batch_inputs': batch_inputs,
+								'batch_labels': batch_labels,
+								'move_time': move_t,
+								'ready_event': None,
+							}
 
 				for micro_idx in range(micro_count):
-					t_wait = time.time()
-					micro_pack = future_map[micro_idx].result()
-					prefetch_wait_time.append(time.time() - t_wait)
-					if micro_pack is None:
-						continue
+					if staged_dev_pack is None:
+						break
+					next_dev_pack = None
+					if micro_idx + 1 < micro_count:
+						next_item = _stage_one(micro_idx + 1)
+						if next_item is not None:
+							micro_pack_next, num_stats = next_item
+							num_input_nids += num_stats['num_input_nids']
+							num_src_node += num_stats['num_src_node']
+							num_out_node_FL += num_stats['num_out_node_FL']
+							if use_cuda_pipeline:
+								next_dev_pack = _enqueue_micro_batch_to_device(
+									micro_pack_next,
+									device,
+									args.dataset,
+									copy_stream,
+									non_blocking=args.prefetch_non_blocking,
+								)
+							else:
+								blocks, batch_inputs, batch_labels, move_t = _move_micro_batch_to_device(
+									micro_pack_next,
+									device,
+									args.dataset,
+									non_blocking=args.prefetch_non_blocking,
+								)
+								next_dev_pack = {
+									'micro_idx': micro_pack_next['stats']['micro_idx'],
+									'blocks': blocks,
+									'batch_inputs': batch_inputs,
+									'batch_labels': batch_labels,
+									'move_time': move_t,
+									'ready_event': None,
+								}
 
-					load_block_time.append(micro_pack['stats']['prepare_time'])
-					num_input_nids += micro_pack['stats']['num_input_nids']
-					num_src_node += micro_pack['stats']['num_src_node']
-					num_out_node_FL += micro_pack['stats']['num_out_node_FL']
-
-					# torch.cuda.empty_cache()
-					torch.cuda.reset_max_memory_allocated()
-					torch.cuda.synchronize() # synchronized
-
-					blocks, batch_inputs, batch_labels, move_t = _move_micro_batch_to_device(
-						micro_pack,
-						device,
-						args.dataset,
-						non_blocking=args.prefetch_non_blocking,
-					)
-					block_move_time.append(move_t)
-
+					if use_cuda_pipeline and staged_dev_pack['ready_event'] is not None:
+						cur_stream = torch.cuda.current_stream(device=device)
+						cur_stream.wait_event(staged_dev_pack['ready_event'])
+						# make allocator stream ownership explicit for cross-stream produced tensors
+						staged_dev_pack['batch_inputs'].record_stream(cur_stream)
+						staged_dev_pack['batch_labels'].record_stream(cur_stream)
+					block_move_time.append(staged_dev_pack['move_time'])
+					blocks_for_compute = staged_dev_pack['blocks'] if 'blocks' in staged_dev_pack else [block.int().to(device) for block in staged_dev_pack['blocks_cpu']]
 					t4 = time.time()
-					batch_pred = model(blocks, batch_inputs)
-					torch.cuda.synchronize() # synchronized
+					batch_pred = model(blocks_for_compute, staged_dev_pack['batch_inputs'])
 					t5 = time.time()
 					model_time.append(t5 - t4)
 
-					pseudo_mini_loss = criterion(batch_pred, batch_labels)
+					pseudo_mini_loss = criterion(batch_pred, staged_dev_pack['batch_labels'])
 					pseudo_mini_loss = pseudo_mini_loss * weights_list[micro_idx]
 					pseudo_mini_loss.backward()
 
 					loss_sum += pseudo_mini_loss
-
-					torch.cuda.synchronize() # synchronized
 					t2 = time.time()
 					loss_time.append(t2 - t5)
 
 					max_memory_allocated = torch.cuda.max_memory_allocated() / (1024 * 1024 * 1024)
 					print("Micro-batch-", micro_idx, " max memory allocated: ", max_memory_allocated, " GB")
+					if '_src_refs' in staged_dev_pack:
+						staged_dev_pack['_src_refs'] = None
+					staged_dev_pack = next_dev_pack
 
 				prefetch_pool.shutdown(wait=True)
 			else:
@@ -813,7 +934,7 @@ def main():
 	argparser.add_argument("--weight-decay", type=float, default=5e-4)
 	argparser.add_argument("--eval", action='store_true')
 	argparser.add_argument('--num-workers', type=int, default=4)
-	argparser.add_argument('--device-number', type=str, default='0')
+	argparser.add_argument('--device-number', type=str, default='1')
 	argparser.add_argument('--num-heads', type=int, default=4)
 	argparser.add_argument('--model', type=str, default='SAGE')
 	argparser.add_argument('--memory-aware-partition', action='store_true')
